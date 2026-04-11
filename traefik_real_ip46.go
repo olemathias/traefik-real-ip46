@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 )
 
@@ -18,6 +19,9 @@ type Config struct {
 	Headers []string `json:"headers,omitempty"`
 	// Prefixes is the list of /96 IPv6 CIDR prefixes to match against.
 	Prefixes []string `json:"prefixes,omitempty"`
+	// Debug enables per-request logging explaining why each address was or
+	// was not converted.
+	Debug bool `json:"debug,omitempty"`
 }
 
 // CreateConfig returns the default plugin configuration.
@@ -25,6 +29,7 @@ func CreateConfig() *Config {
 	return &Config{
 		Headers:  []string{"X-Real-IP", "X-Forwarded-For"},
 		Prefixes: []string{"64:ff9b::/96"},
+		Debug:    false,
 	}
 }
 
@@ -34,6 +39,7 @@ type RealIP46 struct {
 	name     string
 	headers  []string
 	prefixes []*net.IPNet
+	debug    bool
 }
 
 // New creates a new RealIP46 middleware instance.
@@ -63,7 +69,12 @@ func New(_ context.Context, next http.Handler, config *Config, name string) (htt
 		name:     name,
 		headers:  config.Headers,
 		prefixes: prefixes,
+		debug:    config.Debug,
 	}, nil
+}
+
+func (r *RealIP46) debugf(format string, args ...interface{}) {
+	os.Stdout.WriteString("traefik-real-ip46: " + fmt.Sprintf(format, args...) + "\n")
 }
 
 // ServeHTTP processes the request, converting any NAT64 IPv6 addresses that
@@ -72,6 +83,9 @@ func (r *RealIP46) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	for _, header := range r.headers {
 		value := req.Header.Get(header)
 		if value == "" {
+			if r.debug {
+				r.debugf("header %q absent, skipping", header)
+			}
 			continue
 		}
 
@@ -80,16 +94,31 @@ func (r *RealIP46) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 
 		for i, part := range parts {
 			trimmed := strings.TrimSpace(part)
+
 			ip := net.ParseIP(trimmed)
 			if ip == nil {
+				if r.debug {
+					r.debugf("header %q: %q is not a valid IP, skipping", header, trimmed)
+				}
 				continue
 			}
 
 			ip16 := ip.To16()
 			if ip16 == nil {
+				if r.debug {
+					r.debugf("header %q: %q could not be represented as IPv6, skipping", header, trimmed)
+				}
 				continue
 			}
 
+			if ip.To4() != nil {
+				if r.debug {
+					r.debugf("header %q: %q is already IPv4, skipping", header, trimmed)
+				}
+				continue
+			}
+
+			matched := false
 			for _, prefix := range r.prefixes {
 				if prefix.Contains(ip16) {
 					// For a /96 prefix the IPv4 address is embedded in the
@@ -102,8 +131,17 @@ func (r *RealIP46) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 					leading := part[:len(part)-len(strings.TrimLeft(part, " \t"))]
 					parts[i] = leading + ipv4
 					modified = true
+					matched = true
+
+					if r.debug {
+						r.debugf("header %q: %q matched prefix %s, converted to %s", header, trimmed, prefix, ipv4)
+					}
 					break
 				}
+			}
+
+			if r.debug && !matched {
+				r.debugf("header %q: %q is IPv6 but did not match any configured prefix, skipping", header, trimmed)
 			}
 		}
 

@@ -36,6 +36,7 @@ http:
 |--------|------|---------|-------------|
 | `headers` | `[]string` | `["X-Real-IP", "X-Forwarded-For"]` | Headers to inspect and rewrite |
 | `prefixes` | `[]string` | `["64:ff9b::/96"]` | NAT64 prefixes to match against. Must be `/96` IPv6 CIDRs. |
+| `debug` | `bool` | `false` | Log per-request decisions to stdout explaining why each address was or was not converted. |
 
 Multiple prefixes are supported, for example when both the [well-known prefix](https://www.rfc-editor.org/rfc/rfc6052#section-2.1) and a network-specific prefix are in use:
 
@@ -46,41 +47,6 @@ prefixes:
 ```
 
 `X-Forwarded-For` can contain multiple comma-separated addresses — all matching entries are converted.
-
-## Attaching the middleware
-
-### Per router
-
-```yaml
-http:
-  routers:
-    my-router:
-      rule: Host(`example.com`)
-      middlewares:
-        - real-ip46
-      service: my-service
-```
-
-### Globally (all requests)
-
-Attach the middleware to entrypoints in the static configuration so it runs on every request, without needing to reference it on each router:
-
-```yaml
-# traefik.yml (static config)
-entryPoints:
-  web:
-    address: ":80"
-    http:
-      middlewares:
-        - real-ip46@file
-  websecure:
-    address: ":443"
-    http:
-      middlewares:
-        - real-ip46@file
-```
-
-The `@file` suffix refers to the [file provider](https://doc.traefik.io/traefik/providers/file/). Use `@docker` or `@kubernetescrd` if the middleware is defined there instead. The middleware definition in the dynamic config stays the same.
 
 ## Kubernetes (Traefik Helm chart)
 
@@ -120,36 +86,13 @@ The middleware reference format is `{namespace}-{name}@kubernetescrd`.
 ```yaml
 # values.yaml
 ports:
-  web:
-    middlewares:
-      - traefik-real-ip46@kubernetescrd
   websecure:
-    middlewares:
-      - traefik-real-ip46@kubernetescrd
-```
-
-**3b. Or apply per `IngressRoute`:**
-
-```yaml
-apiVersion: traefik.io/v1alpha1
-kind: IngressRoute
-metadata:
-  name: my-app
-  namespace: traefik
-spec:
-  entryPoints:
-    - websecure
-  routes:
-    - match: Host(`example.com`)
-      kind: Rule
+    http:
       middlewares:
-        - name: real-ip46
-      services:
-        - name: my-app
-          port: 80
+        - traefik-real-ip46@kubernetescrd
 ```
 
-## Local development
+## Development
 
 ```sh
 go test ./...

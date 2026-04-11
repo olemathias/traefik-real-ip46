@@ -1,9 +1,12 @@
 package traefik_real_ip46_test
 
 import (
+	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 
 	plugin "github.com/olemathias/traefik-real-ip46"
@@ -27,6 +30,23 @@ func request(t *testing.T, h http.Handler, headers map[string]string) *http.Requ
 	}
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	return req
+}
+
+// captureStdout runs f and returns whatever was written to os.Stdout.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe: %v", err)
+	}
+	old := os.Stdout
+	os.Stdout = w
+	f()
+	w.Close()
+	os.Stdout = old
+	var buf bytes.Buffer
+	io.Copy(&buf, r) //nolint:errcheck
+	return buf.String()
 }
 
 func TestXRealIP_WellKnownPrefix(t *testing.T) {
@@ -154,5 +174,89 @@ func TestNew_Non96Prefix(t *testing.T) {
 	next := http.HandlerFunc(func(rw http.ResponseWriter, _ *http.Request) {})
 	if _, err := plugin.New(context.Background(), next, cfg, "test"); err == nil {
 		t.Error("expected error for non-/96 prefix, got nil")
+	}
+}
+
+// --- Debug mode tests ---
+
+func TestCreateConfig_DebugDefaultFalse(t *testing.T) {
+	if plugin.CreateConfig().Debug {
+		t.Error("CreateConfig().Debug should default to false")
+	}
+}
+
+func TestDebug_NoLog_WhenDisabled(t *testing.T) {
+	cfg := plugin.CreateConfig() // Debug: false
+	h := newMiddleware(t, cfg)
+
+	out := captureStdout(t, func() {
+		request(t, h, map[string]string{"X-Real-IP": "2001:db8::1"})
+	})
+	if out != "" {
+		t.Errorf("expected no log output with debug disabled, got %q", out)
+	}
+}
+
+func TestDebug_LogsConversion(t *testing.T) {
+	cfg := &plugin.Config{
+		Headers:  []string{"X-Real-IP"},
+		Prefixes: []string{"64:ff9b::/96"},
+		Debug:    true,
+	}
+	h := newMiddleware(t, cfg)
+
+	out := captureStdout(t, func() {
+		request(t, h, map[string]string{"X-Real-IP": "64:ff9b::c0a8:101"})
+	})
+	if !bytes.Contains([]byte(out), []byte("converted to 192.168.1.1")) {
+		t.Errorf("expected conversion log, got %q", out)
+	}
+}
+
+func TestDebug_LogsAbsentHeader(t *testing.T) {
+	cfg := &plugin.Config{
+		Headers:  []string{"X-Real-IP"},
+		Prefixes: []string{"64:ff9b::/96"},
+		Debug:    true,
+	}
+	h := newMiddleware(t, cfg)
+
+	out := captureStdout(t, func() {
+		request(t, h, nil)
+	})
+	if !bytes.Contains([]byte(out), []byte("absent")) {
+		t.Errorf("expected absent-header log, got %q", out)
+	}
+}
+
+func TestDebug_LogsNoMatchingPrefix(t *testing.T) {
+	cfg := &plugin.Config{
+		Headers:  []string{"X-Real-IP"},
+		Prefixes: []string{"64:ff9b::/96"},
+		Debug:    true,
+	}
+	h := newMiddleware(t, cfg)
+
+	out := captureStdout(t, func() {
+		request(t, h, map[string]string{"X-Real-IP": "2001:db8::1"})
+	})
+	if !bytes.Contains([]byte(out), []byte("did not match any configured prefix")) {
+		t.Errorf("expected no-match log, got %q", out)
+	}
+}
+
+func TestDebug_LogsAlreadyIPv4(t *testing.T) {
+	cfg := &plugin.Config{
+		Headers:  []string{"X-Real-IP"},
+		Prefixes: []string{"64:ff9b::/96"},
+		Debug:    true,
+	}
+	h := newMiddleware(t, cfg)
+
+	out := captureStdout(t, func() {
+		request(t, h, map[string]string{"X-Real-IP": "192.168.1.1"})
+	})
+	if !bytes.Contains([]byte(out), []byte("already IPv4")) {
+		t.Errorf("expected already-IPv4 log, got %q", out)
 	}
 }

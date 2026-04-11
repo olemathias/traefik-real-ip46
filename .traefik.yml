@@ -11,3 +11,4 @@ testData:
     - X-Forwarded-For
   prefixes:
     - "64:ff9b::/96"
+  debug: false
