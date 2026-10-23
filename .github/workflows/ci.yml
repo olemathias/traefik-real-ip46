@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        # The minimum from go.mod, plus the current release.
+        go: ["1.26", "stable"]
+    env:
+      GOPATH: ${{ github.workspace }}/go
+      # Keep in step with the Yaegi version Traefik embeds.
+      YAEGI_VERSION: v0.16.1
+    defaults:
+      run:
+        # Yaegi resolves the plugin through GOPATH, so check out into it.
+        working-directory: ${{ github.workspace }}/go/src/github.com/olemathias/traefik-real-ip46
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: go/src/github.com/olemathias/traefik-real-ip46
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go test
+        run: go test -v ./...
+
+      - name: Install Yaegi
+        run: |
+          go install github.com/traefik/yaegi/cmd/yaegi@${YAEGI_VERSION}
+          echo "$GOPATH/bin" >> "$GITHUB_PATH"
+
+      - name: yaegi test
+        run: yaegi test -v .
+        env:
+          GO111MODULE: "off"

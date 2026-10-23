@@ -1,6 +1,3 @@
 # Build output
 *.test
 *.out
-
-# Go workspace
-/vendor/

@@ -3,12 +3,13 @@ type: middleware
 import: github.com/olemathias/traefik-real-ip46
 summary: >
   Converts NAT64-mapped IPv6 addresses to their embedded IPv4 addresses in
-  configured request headers (e.g. X-Real-IP, X-Forwarded-For). Supports
-  multiple /96 prefixes per RFC 6052.
+  configured request headers (e.g. X-Real-IP, X-Forwarded-For) and the
+  request's RemoteAddr. Supports multiple /96 prefixes per RFC 6052.
 testData:
   headers:
     - X-Real-IP
     - X-Forwarded-For
   prefixes:
     - "64:ff9b::/96"
+  rewriteRemoteAddr: true
   debug: false
